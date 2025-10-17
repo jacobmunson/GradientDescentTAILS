@@ -1,0 +1,429 @@
+---
+title: "Gradient Descent Walkthrough"
+author: "Will Hammond"
+date: "2025-10-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load necessary library
+library(ggplot2)
+
+# Set seed for reproducibility
+set.seed(42)
+
+```
+
+```{r}
+# Generate synthetic data
+n <- 200
+x <- rnorm(n)
+X <- cbind(1, x)
+beta_true <- c(1.0, 2.0)
+y <- X %*% beta_true + rnorm(n, sd = 0.5)
+```
+
+```{r}
+
+# True line and OLS fit
+y_true <- X %*% beta_true
+beta_hat <- solve(t(X) %*% X) %*% t(X) %*% y
+y_pred <- X %*% beta_hat
+
+# Sort for clean line rendering
+order <- order(x)
+x_sorted <- x[order]
+y_true_sorted <- y_true[order]
+y_pred_sorted <- y_pred[order]
+
+# Create data frame for plotting
+df <- data.frame(
+  x = x,
+  y = y,
+  x_sorted = x_sorted,
+  y_true_sorted = y_true_sorted,
+  y_pred_sorted = y_pred_sorted
+)
+
+# Plot
+ggplot(df, aes(x = x, y = y)) +
+  geom_point(alpha = 0.55, shape = 4) +
+  geom_line(aes(x = x_sorted, y = y_true_sorted), linetype = "dashed", color = "blue") +
+  geom_line(aes(x = x_sorted, y = y_pred_sorted), color = "red") +
+  labs(
+    title = "Linear regression: True vs. OLS fit",
+    x = "x (feature)",
+    y = "y (target)"
+  ) +
+  annotate("text", x = min(x), y = max(y), hjust = 0,
+           label = sprintf("OLS fit (y = %.2fx + %.2f)", beta_hat[2], beta_hat[1]),
+           color = "red") +
+  annotate("text", x = min(x), y = max(y) - 1, hjust = 0,
+           label = "True fit (y = 2x + 1)",
+           color = "blue") +
+  theme_minimal()
+```
+```{r}
+# Standardize feature
+Xs <- X
+Xs[, 2] <- scale(Xs[, 2])
+```
+
+```{r}
+# Closed-form OLS
+XtX <- t(Xs) %*% Xs
+Xty <- t(Xs) %*% y
+beta_ols <- solve(XtX, Xty)
+```
+
+```{r}
+# Gradient Descent Relevant Functions
+loss <- function(beta, X_data = Xs, y_data = y) {
+  r <- X_data %*% beta - y_data
+  mean(r^2)
+}
+
+grad <- function(beta, X_data = Xs, y_data = y) {
+  r <- X_data %*% beta - y_data
+  (2 / length(y_data)) * t(X_data) %*% r
+}
+
+run_gd <- function(eta, steps, beta0 = NULL) {
+  if (is.null(beta0)) {
+    beta <- rep(0, ncol(Xs))  # Initialize beta as a 2D vector
+  } else {
+    beta <- beta0
+  }
+
+  path <- matrix(NA, nrow = steps + 1, ncol = 2)
+  losses <- numeric(steps + 1)
+
+  path[1, ] <- beta
+  losses[1] <- loss(beta)
+
+  for (i in 1:steps) {
+    g <- grad(beta)
+    beta <- beta - eta * g
+    path[i + 1, ] <- beta
+    losses[i + 1] <- loss(beta)
+  }
+
+  list(path = path, losses = losses)
+}
+
+run_minibatch <- function(eta, steps, B, beta0 = NULL, replace = FALSE) {
+  if (is.null(beta0)) {
+    beta <- rep(0, ncol(Xs))  # Initialize beta as a 2D vector
+  } else {
+    beta <- beta0
+  }
+
+  path <- matrix(NA, nrow = steps + 1, ncol = 2)
+  losses <- numeric(steps + 1)
+
+  path[1, ] <- beta
+  losses[1] <- loss(beta)
+
+  for (i in 1:steps) {
+    idx <- sample(1:nrow(Xs), size = B, replace = replace)
+    Xi <- Xs[idx, , drop = FALSE]
+    yi_batch <- y[idx]
+    g <- grad(beta, Xi, yi_batch)
+    beta <- beta - eta * g
+    path[i + 1, ] <- beta
+    losses[i + 1] <- loss(beta)
+  }
+
+  list(path = path, losses = losses)
+}
+
+```
+
+```{r}
+# Trajectories: Batch GD, Mini-Batch GD, Stochastic GD
+steps <- 120
+eta_bgd <- 0.2
+eta_mbgd <- 0.15
+eta_sgd <- 0.05
+
+bgd <- run_gd(eta_bgd, steps)
+mbgd <- run_minibatch(eta_mbgd, steps, B = 32)
+sgd  <- run_minibatch(eta_sgd, steps, B = 1)
+
+path_bgd <- bgd$path
+path_mbgd <- mbgd$path
+path_sgd  <- sgd$path
+
+# Contour grid for J(beta)
+b0_vals <- seq(beta_ols[1] - 2.0, beta_ols[1] + 2.0, length.out = 200)
+b1_vals <- seq(beta_ols[2] - 2.0, beta_ols[2] + 2.0, length.out = 200)
+grid <- expand.grid(b0 = b0_vals, b1 = b1_vals)
+
+# Compute loss at each grid point
+grid$loss <- apply(grid, 1, function(b) loss(c(b[1], b[2])))
+```
+
+```{r}
+# Plot 1 : Contours + Trajectories
+
+## Convert paths to data frames with labels
+df_bgd <- data.frame(b0 = path_bgd[, 1], b1 = path_bgd[, 2], method = "Batch GD")
+df_mbgd <- data.frame(b0 = path_mbgd[, 1], b1 = path_mbgd[, 2], method = "Mini-batch (B=32)")
+df_sgd  <- data.frame(b0 = path_sgd[, 1], b1 = path_sgd[, 2], method = "SGD (B=1)")
+df_ols  <- data.frame(b0 = beta_ols[1], b1 = beta_ols[2], method = "OLS optimum")
+
+# Combine all paths
+df_all <- rbind(df_bgd, df_mbgd, df_sgd)
+
+# Plot
+ggplot(grid, aes(x = b0, y = b1)) +
+  geom_contour(aes(z = loss), bins = 20, color = "gray") +
+  geom_path(data = df_all, aes(x = b0, y = b1, color = method), size = 0.8) +
+  geom_point(data = df_ols, aes(x = b0, y = b1, shape = method), size = 3, color = "black") +
+  scale_color_manual(values = c(
+    "Batch GD" = "blue",
+    "Mini-batch (B=32)" = "green",
+    "SGD (B=1)" = "red"
+  )) +
+  scale_shape_manual(values = c("OLS optimum" = 8)) +
+  labs(
+    title = "GD Trajectories on MSE Contours",
+    x = expression(beta[0]),
+    y = expression(beta[1]),
+    color = "Method",
+    shape = "Method"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Plot 2: Loss vs iterations for different learning rates (batch GD)
+# Define learning rates and number of steps
+etas <- c(0.05, 0.1, 0.2, 0.35)
+steps <- 150
+
+# Run batch GD for each learning rate and collect losses
+loss_data <- data.frame()
+for (eta in etas) {
+  result <- run_gd(eta, steps)
+  df <- data.frame(
+    Iteration = 0:steps,
+    Loss = result$losses,
+    LearningRate = paste0("eta = ", eta)
+  )
+  loss_data <- rbind(loss_data, df)
+}
+
+# Plot
+ggplot(loss_data, aes(x = Iteration, y = Loss, color = LearningRate)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Batch GD: Learning rate effect",
+    x = "Iteration",
+    y = "Training MSE",
+    color = "Learning Rate"
+  ) +
+  theme_minimal()
+```
+```{r}
+# Plot 3: Loss vs iterations for different batch sizes
+# Define batch sizes and number of steps
+batch_sizes <- c(1, 8, 32, nrow(Xs))
+steps <- 300
+
+# Run GD or mini-batch GD for each batch size
+loss_data <- data.frame()
+for (B in batch_sizes) {
+  eta <- if (B == nrow(Xs)) 0.15 else 0.08
+  result <- if (B == nrow(Xs)) run_gd(eta, steps) else run_minibatch(eta, steps, B = B)
+  df <- data.frame(
+    Iteration = 0:steps,
+    Loss = result$losses,
+    BatchSize = paste0("B = ", B)
+  )
+  loss_data <- rbind(loss_data, df)
+}
+
+# Plot
+ggplot(loss_data, aes(x = Iteration, y = Loss, color = BatchSize)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Effect of Batch Size on Convergence/Noise",
+    x = "Iteration",
+    y = "Training MSE",
+    color = "Batch Size"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Plot 4: Parameter distance to OLS over iterations (mini-batch)
+# Define batch sizes and number of steps
+batch_sizes <- c(1, 16, 64)
+steps <- 300
+eta <- 0.08
+
+# Run mini-batch GD and compute distances
+dist_data <- data.frame()
+for (B in batch_sizes) {
+  result <- run_minibatch(eta, steps, B = B)
+  path <- result$path
+  dist <- apply(path, 1, function(beta) sqrt(sum((beta - beta_ols)^2)))
+  df <- data.frame(
+    Iteration = 0:steps,
+    Distance = dist,
+    BatchSize = paste0("B = ", B)
+  )
+  dist_data <- rbind(dist_data, df)
+}
+
+# Plot
+ggplot(dist_data, aes(x = Iteration, y = Distance, color = BatchSize)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Parameter Convergence vs. OLS",
+    x = "Iteration",
+    y = expression(norm(beta[t] - beta[OLS], "2")),
+    color = "Batch Size"
+  ) +
+  theme_minimal()
+```
+```{r}
+# Helper to compute loss on the *full* design used by benchmark.
+# If you want to reuse Xs here, it will match plotting data; if you want the
+# big benchmark dataset, bind X/y to those before calling these bench functions.
+full_loss <- function(beta) {
+  r <- X %*% beta - y
+  n_ <- length(y)
+  sum(r^2) / n_
+}
+
+# OLS via QR decomposition. Returns (beta, seconds, train_mse).
+run_ols_bench <- function() {
+  t0 <- Sys.time()
+  beta <- qr.solve(X, y)
+  t1 <- Sys.time()
+  secs <- as.numeric(difftime(t1, t0, units = "secs"))
+  list(beta = beta, time = secs, mse = full_loss(beta))
+}
+
+# Full-batch GD. Returns (beta, seconds, train_mse).
+run_gd_bench <- function(eta, steps, beta0 = NULL) {
+  d <- ncol(X)
+  beta <- if (is.null(beta0)) rep(0, d) else beta0
+
+  t0 <- Sys.time()
+  for (i in 1:steps) {
+    r <- X %*% beta - y
+    g <- (2 / length(y)) * t(X) %*% r
+    beta <- beta - eta * g
+  }
+  t1 <- Sys.time()
+  secs <- as.numeric(difftime(t1, t0, units = "secs"))
+  list(beta = beta, time = secs, mse = full_loss(beta))
+}
+
+# Mini-batch GD (default with replacement to mirror benchmark).
+run_minibatch_bench <- function(eta, steps, B, beta0 = NULL, replace = TRUE) {
+  d <- ncol(X)
+  beta <- if (is.null(beta0)) rep(0, d) else beta0
+
+  t0 <- Sys.time()
+  for (i in 1:steps) {
+    idx <- sample(1:nrow(X), size = B, replace = replace)
+    Xi <- X[idx, , drop = FALSE]
+    yi_batch <- y[idx]
+    r <- Xi %*% beta - yi_batch
+    g <- (2 / length(yi_batch)) * t(Xi) %*% r
+    beta <- beta - eta * g
+  }
+  t1 <- Sys.time()
+  secs <- as.numeric(difftime(t1, t0, units = "secs"))
+  list(beta = beta, time = secs, mse = full_loss(beta))
+}
+
+# SGD with B=1. Returns (beta, seconds, train_mse).
+run_sgd_bench <- function(eta, steps, beta0 = NULL) {
+  d <- ncol(X)
+  beta <- if (is.null(beta0)) rep(0, d) else beta0
+
+  t0 <- Sys.time()
+  for (i in 1:steps) {
+    idx <- sample(1:nrow(X), size = 1)
+    xi <- X[idx, ]
+    yi_ <- y[idx]
+    g <- 2 * xi * (sum(xi * beta) - yi_)
+    beta <- beta - eta * g
+  }
+  t1 <- Sys.time()
+  secs <- as.numeric(difftime(t1, t0, units = "secs"))
+  list(beta = beta, time = secs, mse = full_loss(beta))
+}
+```
+
+
+```{r}
+# Big synthetic dataset for benchmarking (n=80,000, d=40)
+set.seed(0)
+n <- 80000
+d <- 40
+X <- matrix(rnorm(n * d), nrow = n, ncol = d)
+beta_true <- rnorm(d)
+y <- X %*% beta_true + rnorm(n, sd = 0.5)
+
+# Standardize columns of X (like before)
+X <- scale(X)
+Xs <- X  # Optional: keep Xs aligned to X if plotting helpers might fall back to it
+
+# Consolidated runtime vs MSE barplot
+rows <- list()
+
+# OLS
+ols <- run_ols_bench()
+rows[[1]] <- c("OLS (lstsq)", ols$time, ols$mse)
+
+# Batch GD (fixed iters, like benchmark)
+eta <- 0.25
+iters <- 60
+bgd <- run_gd_bench(eta, iters)
+rows[[2]] <- c(paste("Batch GD (", iters, " iters)", sep = ""), bgd$time, bgd$mse)
+
+# Mini-batch GD (~4 epochs)
+B <- min(1024, n)                        # adapt to dataset size
+steps <- max(1, (n %/% B) * 4)           # ~4 epochs; ensure >=1 step
+eta_mb <- 0.08
+mbgd <- run_minibatch_bench(eta_mb, steps, B = B, replace = TRUE)
+rows[[3]] <- c(paste("Mini-batch GD (B=", B, ", ~4 epochs)", sep = ""), mbgd$time, mbgd$mse)
+
+# SGD (~1 epoch)
+eta_sgd <- 0.01
+sgd_steps <- max(1, n)                   # ~1 epoch; ensure >=1 step
+sgd <- run_sgd_bench(eta_sgd, sgd_steps)
+rows[[4]] <- c("SGD (B=1, ~1 epoch)", sgd$time, sgd$mse)
+
+# Assemble and sort
+df <- do.call(rbind, rows)
+df <- as.data.frame(df)
+names(df) <- c("Method", "WallTime", "TrainMSE")
+df$WallTime <- as.numeric(df$WallTime)
+df$TrainMSE <- as.numeric(df$TrainMSE)
+df <- df[order(df$WallTime), ]
+df$Method <- factor(df$Method, levels = df$Method)
+
+# Plot
+ggplot(df, aes(x = WallTime, y = Method)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = sprintf("%.2fs | MSE=%.3f", WallTime, TrainMSE)),
+            hjust = 0, nudge_x = 0.1, size = 3.5) +
+  labs(
+    title = "Runtime vs. Fit Quality\nBars: wall-clock time; Labels: seconds and training MSE",
+    x = "Wall time (seconds)",
+    y = NULL
+  ) +
+  theme_minimal()
+```
+
